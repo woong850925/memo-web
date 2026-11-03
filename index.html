@@ -38,6 +38,9 @@ label{display:block;margin:14px 0 6px;font-size:14px}
 .tb:hover{background:var(--line)}
 .tb.cancel{color:#bbb;font-weight:400}
 .tb.del{color:var(--danger);font-weight:400}
+.info{margin:10px 2px 0;font-size:12px;color:var(--sub)}
+.info span{display:block}
+@media (max-height:480px){.info span{display:inline;margin-right:14px}}
 .hint{margin:8px 0 0;font-size:13px;color:var(--sub)}
 .full{width:100%;margin-top:18px;background:#f2f2f2;color:#111;text-align:center}
 </style>
@@ -55,6 +58,7 @@ label{display:block;margin:14px 0 6px;font-size:14px}
 
 <dialog id="dlg">
   <textarea id="ta" placeholder="메모를 입력하세요" aria-label="메모 내용"></textarea>
+  <div class="info" id="info" hidden><span id="i1"></span><span id="i2"></span></div>
   <div class="row">
     <button class="tb del" id="del" hidden>삭제</button>
     <span class="sp"></span>
@@ -91,16 +95,22 @@ function parse(raw){
   raw=(raw||'').trim(); if(!raw) return [];
   const j=JSON.parse(raw), a=Array.isArray(j)?j:(j.memos||[]);
   return a.map(o=>{const id=String(o.id);let u=Number(o.updatedAt)||0;if(!u)u=Number(id)||1;
-    return{id,text:o.text==null?'':String(o.text),updatedAt:u,deleted:!!o.deleted}});
+    let c=Number(o.createdAt)||0; if(!c){const n=Number(id); if(n>1e12)c=n} // 0 = 기록 없음
+    return{id,text:o.text==null?'':String(o.text),updatedAt:u,deleted:!!o.deleted,createdAt:c}});
 }
-const toJson=l=>JSON.stringify({version:1,memos:l.map(x=>({id:x.id,text:x.text,updatedAt:x.updatedAt,deleted:x.deleted}))},null,2);
+const toJson=l=>JSON.stringify({version:1,memos:l.map(x=>({id:x.id,text:x.text,updatedAt:x.updatedAt,deleted:x.deleted,createdAt:x.createdAt||0}))},null,2);
 function merge(a,b){
   const m=new Map();
-  for(const x of a.concat(b)){const c=m.get(x.id);if(!c||x.updatedAt>c.updatedAt)m.set(x.id,x)}
+  for(const x of a.concat(b)){
+    const c=m.get(x.id); if(!c){m.set(x.id,x);continue}
+    const w=x.updatedAt>c.updatedAt?x:c;
+    const cr=!c.createdAt?x.createdAt:!x.createdAt?c.createdAt:Math.min(c.createdAt,x.createdAt); // 최초 작성 시각은 가장 이른 값 유지
+    m.set(x.id,{...w,createdAt:cr||0});
+  }
   const cut=Date.now()-KEEP;
   return[...m.values()].filter(x=>!(x.deleted&&x.updatedAt<cut)).sort((p,q)=>q.updatedAt-p.updatedAt);
 }
-const sig=l=>JSON.stringify([...l].sort((a,b)=>a.id<b.id?-1:1).map(x=>[x.id,x.text,x.updatedAt,x.deleted]));
+const sig=l=>JSON.stringify([...l].sort((a,b)=>a.id<b.id?-1:1).map(x=>[x.id,x.text,x.updatedAt,x.deleted,x.createdAt||0]));
 
 /* ---- GitHub Contents API ---- */
 const hdr=()=>({Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'});
@@ -149,7 +159,7 @@ async function sync(){
 
 /* ---- 메모 추가/수정/삭제 ---- */
 function changed(){persist();render();sync()}
-const add=t=>{memos=memos.concat({id:uid(),text:t,updatedAt:Date.now(),deleted:false});changed()};
+const add=t=>{const n=Date.now();memos=memos.concat({id:uid(),text:t,createdAt:n,updatedAt:n,deleted:false});changed()};
 const upd=(id,t)=>{const n=Date.now();memos=memos.map(m=>m.id===id?{...m,text:t,updatedAt:n}:m);changed()};
 const del=id=>{const n=Date.now();memos=memos.map(m=>m.id===id?{...m,text:'',deleted:true,updatedAt:n}:m);changed()};
 
@@ -167,10 +177,14 @@ function render(){
   $('#empty').hidden=l.length>0;
 }
 const dlg=$('#dlg'), ta=$('#ta'), cdlg=$('#cdlg');
+const p2=n=>String(n).padStart(2,'0');
+const fmt=t=>{if(!t)return'기록 없음';const d=new Date(t);return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate())+' '+p2(d.getHours())+':'+p2(d.getMinutes())};
 let cur=null;
 function openEdit(id){
   const m=id?memos.find(x=>x.id===id&&!x.deleted):null;
   cur=m?m.id:null; ta.value=m?m.text:''; $('#del').hidden=!m;
+  $('#info').hidden=!m;
+  if(m){$('#i1').textContent='최초 작성  '+fmt(m.createdAt);$('#i2').textContent='마지막 수정  '+fmt(m.updatedAt)}
   dlg.showModal(); ta.focus(); ta.setSelectionRange(ta.value.length,ta.value.length);
 }
 function saveClose(){const t=ta.value.trim();if(t){cur?upd(cur,t):add(t)}dlg.close()}
