@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#121212">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="위젯 메모">
+<title>위젯 메모</title>
+<style>
+:root{--bg:#121212;--card:#1e1e1e;--field:#2b2b2b;--text:#fff;--sub:#9a9a9a;--line:#ffffff22;--danger:#ff6b6b}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:2px;padding:6px 12px 6px 16px;background:var(--bg);border-bottom:1px solid var(--line)}
+h1{flex:1;margin:0;font-size:18px}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,.memo:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid #7cc4ff;outline-offset:2px}
+.ic{width:44px;height:44px;border:0;border-radius:50%;background:none;font-size:22px}
+.ic:hover{background:var(--line)}
+#st{min-height:1.6em;padding:6px 16px 0;font-size:13px;color:var(--sub)}
+main{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;padding:12px 16px 110px;align-items:start}
+.memo{background:var(--card);border-radius:14px;padding:12px 14px;cursor:pointer}
+.memo .t{white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:10;-webkit-box-orient:vertical;overflow:hidden}
+#empty{grid-column:1/-1;text-align:center;color:var(--sub);padding:56px 0}
+#add{position:fixed;right:max(20px,env(safe-area-inset-right));bottom:max(20px,env(safe-area-inset-bottom));width:60px;height:60px;border:0;border-radius:50%;background:#f2f2f2;color:#111;font-size:32px;line-height:1;box-shadow:0 4px 14px #0008}
+dialog{width:min(92vw,560px);padding:16px;border:0;border-radius:16px;background:var(--card);color:var(--text)}
+@media (min-width:900px) and (min-height:600px){dialog{width:min(92vw,640px)}}
+dialog::backdrop{background:#000a}
+textarea,input{display:block;width:100%;border:0;border-radius:12px;background:var(--field);color:var(--text);font:inherit;padding:12px}
+textarea{height:min(14rem,45vh);resize:none}
+@media (max-height:480px){textarea{height:min(8rem,40vh)}}
+label{display:block;margin:14px 0 6px;font-size:14px}
+.row{display:flex;align-items:center;gap:4px;margin-top:10px}
+.row .sp{flex:1}
+.tb{border:0;background:none;padding:10px 14px;border-radius:10px;font-weight:600}
+.tb:hover{background:var(--line)}
+.tb.cancel{color:#bbb;font-weight:400}
+.tb.del{color:var(--danger);font-weight:400}
+.hint{margin:8px 0 0;font-size:13px;color:var(--sub)}
+.full{width:100%;margin-top:18px;background:#f2f2f2;color:#111;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>메모</h1>
+  <button class="ic" id="sync" aria-label="동기화">↻</button>
+  <button class="ic" id="cfg" aria-label="설정">⚙</button>
+</header>
+<div id="st" role="status" aria-live="polite"></div>
+<main id="list"></main>
+<div id="empty" hidden>+ 를 눌러 메모하세요</div>
+<button id="add" aria-label="새 메모">+</button>
+
+<dialog id="dlg">
+  <textarea id="ta" placeholder="메모를 입력하세요" aria-label="메모 내용"></textarea>
+  <div class="row">
+    <button class="tb del" id="del" hidden>삭제</button>
+    <span class="sp"></span>
+    <button class="tb cancel" id="cancel">취소</button>
+    <button class="tb" id="save">저장</button>
+  </div>
+  <p class="hint">Ctrl+Enter 저장 · Esc 닫기</p>
+</dialog>
+
+<dialog id="cdlg">
+  <strong>동기화 설정</strong>
+  <p class="hint">GitHub 비공개 저장소의 memos.json 으로 안드로이드 앱과 같은 메모를 공유합니다.</p>
+  <label for="repo">저장소 (계정명/저장소명)</label>
+  <input id="repo" placeholder="예: myname/memo-data" autocapitalize="off" autocomplete="off" spellcheck="false">
+  <label for="tok">토큰 (Personal Access Token)</label>
+  <input id="tok" type="password" placeholder="github_pat_..." autocomplete="off">
+  <button class="tb full" id="csave">저장하고 동기화</button>
+  <div class="row"><span class="sp"></span><button class="tb cancel" id="cclose">닫기</button></div>
+  <p class="hint">토큰은 이 브라우저 안에만 저장됩니다. 다른 사람과 함께 쓰는 기기에는 입력하지 마세요.</p>
+</dialog>
+
+<script>
+const $=s=>document.querySelector(s);
+const API='https://api.github.com/repos/', KEEP=60*864e5;
+const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
+let memos=load('wm_memos',[]), cfg=load('wm_cfg',{repo:'',token:''});
+const persist=()=>{try{localStorage.setItem('wm_memos',JSON.stringify(memos))}catch(e){}};
+const uid=()=>crypto.randomUUID?crypto.randomUUID():'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c=='x'?r:(r&3|8)).toString(16)});
+const setSt=t=>{$('#st').textContent=t};
+const clock=()=>new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
+
+/* ---- memos.json 형식: 안드로이드 앱과 동일 ---- */
+function parse(raw){
+  raw=(raw||'').trim(); if(!raw) return [];
+  const j=JSON.parse(raw), a=Array.isArray(j)?j:(j.memos||[]);
+  return a.map(o=>{const id=String(o.id);let u=Number(o.updatedAt)||0;if(!u)u=Number(id)||1;
+    return{id,text:o.text==null?'':String(o.text),updatedAt:u,deleted:!!o.deleted}});
+}
+const toJson=l=>JSON.stringify({version:1,memos:l.map(x=>({id:x.id,text:x.text,updatedAt:x.updatedAt,deleted:x.deleted}))},null,2);
+function merge(a,b){
+  const m=new Map();
+  for(const x of a.concat(b)){const c=m.get(x.id);if(!c||x.updatedAt>c.updatedAt)m.set(x.id,x)}
+  const cut=Date.now()-KEEP;
+  return[...m.values()].filter(x=>!(x.deleted&&x.updatedAt<cut)).sort((p,q)=>q.updatedAt-p.updatedAt);
+}
+const sig=l=>JSON.stringify([...l].sort((a,b)=>a.id<b.id?-1:1).map(x=>[x.id,x.text,x.updatedAt,x.deleted]));
+
+/* ---- GitHub Contents API ---- */
+const hdr=()=>({Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'});
+const errFor=c=>new Error({401:'토큰이 올바르지 않거나 만료되었습니다',403:'권한 부족 또는 요청 제한 (토큰의 Contents 권한을 확인하세요)',404:'저장소를 찾을 수 없습니다 (저장소 이름과 토큰 권한을 확인하세요)'}[c]||'GitHub 오류 '+c);
+const b64d=s=>new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g,'')),c=>c.charCodeAt(0)));
+const b64e=s=>{const u=new TextEncoder().encode(s);let t='';for(let i=0;i<u.length;i+=8192)t+=String.fromCharCode.apply(null,u.subarray(i,i+8192));return btoa(t)};
+async function fetchRemote(){
+  const r=await fetch(API+cfg.repo+'/contents/memos.json',{headers:hdr(),cache:'no-store'});
+  if(r.status===200){const o=await r.json();return{memos:parse(b64d(o.content)),sha:o.sha}}
+  if(r.status===404){
+    const q=await fetch(API+cfg.repo,{headers:hdr(),cache:'no-store'});
+    if(q.status!==200) throw errFor(q.status);
+    return{memos:[],sha:null};
+  }
+  throw errFor(r.status);
+}
+async function push(list,sha){
+  const body={message:'memo sync',content:b64e(toJson(list))}; if(sha) body.sha=sha;
+  const r=await fetch(API+cfg.repo+'/contents/memos.json',{method:'PUT',headers:{...hdr(),'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===200||r.status===201) return true;
+  if(r.status===409||r.status===422) return false; // 다른 기기가 먼저 수정 → 다시 읽어서 재시도
+  throw errFor(r.status);
+}
+
+/* ---- 동기화 (안드로이드 SyncManager와 같은 순서) ---- */
+let busy=false, again=false;
+async function sync(){
+  if(!cfg.repo||!cfg.token){setSt('⚙ 설정에서 저장소와 토큰을 입력하세요');return}
+  if(busy){again=true;return}
+  busy=true; setSt('동기화 중...');
+  try{
+    let ok=false;
+    for(let i=0;i<3&&!ok;i++){
+      const rem=await fetchRemote();
+      const merged=merge(memos,rem.memos);
+      if(sig(merged)!==sig(rem.memos) && !(await push(merged,rem.sha))) continue;
+      memos=merge(memos,merged); persist(); render(); ok=true; // 동기화 중 새로 쓴 메모도 보호
+    }
+    setSt(ok?'동기화 완료 '+clock():'다른 기기와 충돌해 실패했습니다. 다시 시도해 주세요');
+  }catch(e){
+    setSt(e instanceof TypeError?'인터넷 연결을 확인하세요':'동기화 실패: '+(e.message||'알 수 없는 오류'));
+  }finally{
+    busy=false; if(again){again=false;sync()}
+  }
+}
+
+/* ---- 메모 추가/수정/삭제 ---- */
+function changed(){persist();render();sync()}
+const add=t=>{memos=memos.concat({id:uid(),text:t,updatedAt:Date.now(),deleted:false});changed()};
+const upd=(id,t)=>{const n=Date.now();memos=memos.map(m=>m.id===id?{...m,text:t,updatedAt:n}:m);changed()};
+const del=id=>{const n=Date.now();memos=memos.map(m=>m.id===id?{...m,text:'',deleted:true,updatedAt:n}:m);changed()};
+
+/* ---- 화면 ---- */
+function render(){
+  const l=memos.filter(x=>!x.deleted).sort((a,b)=>b.updatedAt-a.updatedAt);
+  $('#list').replaceChildren(...l.map(m=>{
+    const d=document.createElement('div'),t=document.createElement('div');
+    d.className='memo'; d.tabIndex=0; d.setAttribute('role','button');
+    t.className='t'; t.textContent=m.text; d.append(t);
+    d.onclick=()=>openEdit(m.id);
+    d.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openEdit(m.id)}};
+    return d;
+  }));
+  $('#empty').hidden=l.length>0;
+}
+const dlg=$('#dlg'), ta=$('#ta'), cdlg=$('#cdlg');
+let cur=null;
+function openEdit(id){
+  const m=id?memos.find(x=>x.id===id&&!x.deleted):null;
+  cur=m?m.id:null; ta.value=m?m.text:''; $('#del').hidden=!m;
+  dlg.showModal(); ta.focus(); ta.setSelectionRange(ta.value.length,ta.value.length);
+}
+function saveClose(){const t=ta.value.trim();if(t){cur?upd(cur,t):add(t)}dlg.close()}
+$('#add').onclick=()=>openEdit(null);
+$('#save').onclick=saveClose;
+$('#cancel').onclick=()=>dlg.close();
+$('#del').onclick=()=>{if(cur)del(cur);dlg.close()};
+ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();saveClose()}}); // Esc는 dialog 기본 동작(저장 안 함)
+$('#sync').onclick=sync;
+$('#cfg').onclick=()=>{$('#repo').value=cfg.repo;$('#tok').value='';$('#tok').placeholder=cfg.token?'저장됨 (바꾸려면 새 토큰 입력)':'github_pat_...';cdlg.showModal()};
+$('#cclose').onclick=()=>cdlg.close();
+$('#csave').onclick=()=>{
+  const repo=$('#repo').value.trim().replace(/^https:\/\/github\.com\//,'').replace(/\.git$/,'').replace(/^\/+|\/+$/g,'');
+  const token=$('#tok').value.trim()||cfg.token;
+  if(!repo.includes('/')){setSt('저장소는 계정명/저장소명 형식으로 입력하세요');return}
+  if(!token){setSt('토큰을 입력하세요');return}
+  cfg={repo,token}; try{localStorage.setItem('wm_cfg',JSON.stringify(cfg))}catch(e){}
+  cdlg.close(); sync();
+};
+
+/* ---- 자동 동기화: 열 때 / 다시 보일 때 / 온라인 복귀 / 보는 동안 1분마다 ---- */
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync()});
+addEventListener('online',sync);
+setInterval(()=>{if(!document.hidden)sync()},60000);
+
+render();
+cfg.repo&&cfg.token?sync():setSt('⚙ 설정에서 저장소와 토큰을 입력하세요');
+</script>
+</body>
+</html>
